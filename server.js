@@ -59,20 +59,18 @@ function rememberTelegramMessage(message){
   const chatId=String(chat.id);
   const label=chat.title||[chat.first_name,chat.last_name].filter(Boolean).join(" ")||chat.username||chatId;
   telegramChats.set(chatId,{id:chatId,label,type:chat.type||"unknown"});
+
   if(!telegramChatId && chat.type==="private"){
     telegramChatId=chatId;
     telegramChatLabel=label;
   }
+
   const sender=message.from?.username?`@${message.from.username}`:[message.from?.first_name,message.from?.last_name].filter(Boolean).join(" ")||"Unknown";
   const text=message.text||message.caption||"";
   if(!text) return;
+
   const list=telegramMessages.get(chatId)||[];
-  list.push({
-    messageId:message.message_id,
-    date:message.date,
-    sender,
-    text:String(text).slice(0,6000)
-  });
+  list.push({messageId:message.message_id,date:message.date,sender,text:String(text).slice(0,6000)});
   if(list.length>500) list.splice(0,list.length-500);
   telegramMessages.set(chatId,list);
 }
@@ -82,6 +80,45 @@ function findTelegramChatByName(name){
   if(!q) return null;
   const chats=[...telegramChats.values()];
   return chats.find(c=>c.label.toLowerCase()===q)||chats.find(c=>c.label.toLowerCase().includes(q))||chats.find(c=>q.includes(c.label.toLowerCase()))||null;
+}
+
+function getTelegramGroupRows(){
+  return [...telegramChats.values()]
+    .filter(c=>c.type==="group"||c.type==="supergroup")
+    .map(c=>({
+      id:c.id,
+      label:c.label,
+      type:c.type,
+      messageCount:(telegramMessages.get(c.id)||[]).length
+    }))
+    .sort((a,b)=>a.label.localeCompare(b.label));
+}
+
+function formatTelegramGroupsReply(){
+  const groups=getTelegramGroupRows();
+  if(!groups.length) return "Bang John, belum ada grup Telegram yang terbaca oleh VEXA. Setelah webhook aktif, kirim satu pesan baru di grup yang sudah memasukkan bot VEXA.";
+  const lines=groups.map((g,i)=>`${i+1}. ${g.label} — ${g.messageCount} pesan terbaca`);
+  return `Bang John, grup Telegram yang sudah terbaca:\n${lines.join("\n")}`;
+}
+
+function getRecentTelegramReply(question){
+  const q=String(question||"").toLowerCase();
+  const groups=getTelegramGroupRows();
+  if(!groups.length) return "Bang John, belum ada pesan grup Telegram yang masuk ke VEXA.";
+
+  let targets=groups;
+  const named=groups.find(g=>q.includes(g.label.toLowerCase()));
+  if(named) targets=[named];
+
+  const blocks=[];
+  for(const group of targets){
+    const items=(telegramMessages.get(group.id)||[]).slice(-5);
+    if(!items.length) continue;
+    const lines=items.map(i=>`• ${i.sender}: ${i.text}`);
+    blocks.push(`${group.label}\n${lines.join("\n")}`);
+  }
+  if(!blocks.length) return "Bang John, grupnya sudah dikenali tetapi belum ada isi pesan baru yang tersimpan.";
+  return `Bang John, pesan Telegram terbaru yang terbaca:\n\n${blocks.join("\n\n")}`;
 }
 
 async function sendTelegramMessage(text,targetName=null){
@@ -121,9 +158,7 @@ function selectTelegramMessagesForQuestion(question){
   for(const [chatId,items] of telegramMessages.entries()){
     const chat=telegramChats.get(chatId);
     if(!chat) continue;
-    if(q.includes(chat.label.toLowerCase())||q.includes("semua grup")||q.includes("kedua grup")||q.includes("telegram")){
-      selected.push({chat,items:items.slice(-120)});
-    }
+    if(q.includes(chat.label.toLowerCase())||q.includes("semua grup")||q.includes("kedua grup")||q.includes("telegram")) selected.push({chat,items:items.slice(-120)});
   }
   if(!selected.length){
     selected=[...telegramMessages.entries()].map(([chatId,items])=>({chat:telegramChats.get(chatId),items:items.slice(-80)})).filter(x=>x.chat);
@@ -133,7 +168,7 @@ function selectTelegramMessagesForQuestion(question){
 
 async function analyzeTelegramGroups(client,model,question){
   const selected=selectTelegramMessagesForQuestion(question);
-  if(!selected.length) return {handled:true,reply:"Bang John, VEXA belum punya pesan grup untuk dianalisis. Kirim beberapa chat baru di grup Raya Computer atau Project Yunas terlebih dahulu."};
+  if(!selected.length) return {handled:true,reply:"Bang John, VEXA belum punya pesan grup untuk dianalisis. Kirim beberapa chat baru di grup terlebih dahulu."};
   const transcript=selected.map(({chat,items})=>{
     const lines=items.map(i=>`[${new Date((i.date||0)*1000).toISOString()}] ${i.sender}: ${i.text}`);
     return `GRUP: ${chat.label}\n${lines.join("\n")}`;
@@ -144,6 +179,18 @@ async function analyzeTelegramGroups(client,model,question){
     input:[{role:"user",content:`Pertanyaan Bang John: ${question}\n\nPercakapan Telegram:\n${transcript}`}]
   });
   return {handled:true,reply:response.output_text?.trim()||"Bang John, saya belum bisa menyimpulkan percakapan grup tadi."};
+}
+
+function isTelegramGroupListIntent(message){
+  return /(grup apa|grup mana|daftar grup|grup telegram|yang terbaca|sudah terbaca|terdeteksi|cek koneksi|cek telegram)/i.test(message);
+}
+
+function isTelegramRecentIntent(message){
+  return /(pesan terbaru|chat terbaru|pesan terakhir|chat terakhir|isi terbaru|apa pesan terakhir)/i.test(message) && /(telegram|grup|raya|yunas|project)/i.test(message);
+}
+
+function isTelegramAnalysisIntent(message){
+  return /(rangkum|ringkas|analisa|analisis|apa yang terjadi|tindak lanjut|follow.?up|kesimpulan|masalah|keputusan)/i.test(message) && /(telegram|grup|raya|yunas|project)/i.test(message);
 }
 
 async function planCalendarAction(client, model, message){
@@ -186,8 +233,8 @@ async function handleCalendarCommand(openaiClient, model, message){
   return null;
 }
 
-app.get("/",(_req,res)=>res.json({service:"VEXA AI Companion",status:"online",version:"3.4.0",voice:"shimmer",calendar:Boolean(googleTokens),telegram:Boolean(process.env.TELEGRAM_BOT_TOKEN),telegramGroups:telegramChats.size}));
-app.get("/health",(_req,res)=>res.json({ok:true,service:"VEXA",version:"3.4.0",voice:"shimmer",calendar:Boolean(googleTokens),telegram:Boolean(process.env.TELEGRAM_BOT_TOKEN),telegramGroups:telegramChats.size}));
+app.get("/",(_req,res)=>res.json({service:"VEXA AI Companion",status:"online",version:"3.4.1",voice:"shimmer",calendar:Boolean(googleTokens),telegram:Boolean(process.env.TELEGRAM_BOT_TOKEN),telegramGroups:getTelegramGroupRows().length}));
+app.get("/health",(_req,res)=>res.json({ok:true,service:"VEXA",version:"3.4.1",voice:"shimmer",calendar:Boolean(googleTokens),telegram:Boolean(process.env.TELEGRAM_BOT_TOKEN),telegramGroups:getTelegramGroupRows().length}));
 
 app.get("/auth/google",(req,res)=>{
   try{
@@ -209,8 +256,18 @@ app.get("/auth/google/callback",async(req,res)=>{
 });
 
 app.get("/api/calendar/status",(_req,res)=>res.json({ok:true,connected:Boolean(googleTokens)}));
-app.get("/api/telegram/status",(_req,res)=>res.json({ok:true,configured:Boolean(process.env.TELEGRAM_BOT_TOKEN),webhook:telegramWebhookUrl,groups:[...telegramChats.values()].map(c=>({label:c.label,type:c.type,messageCount:(telegramMessages.get(c.id)||[]).length}))}));
-app.get("/api/telegram/groups",(_req,res)=>res.json({ok:true,groups:[...telegramChats.values()].map(c=>({label:c.label,type:c.type,messageCount:(telegramMessages.get(c.id)||[]).length}))}));
+app.get("/api/telegram/status",async(_req,res)=>{
+  try{
+    let webhookInfo=null;
+    if(process.env.TELEGRAM_BOT_TOKEN){
+      try{webhookInfo=await telegramApi("getWebhookInfo",{});}catch{}
+    }
+    res.json({ok:true,configured:Boolean(process.env.TELEGRAM_BOT_TOKEN),webhook:telegramWebhookUrl,webhookInfo,groups:getTelegramGroupRows()});
+  }catch(error){res.status(500).json({ok:false,error:"Status Telegram belum dapat dibaca."});}
+});
+app.get("/api/telegram/groups",(_req,res)=>res.json({ok:true,groups:getTelegramGroupRows()}));
+app.get("/api/telegram/recent",(_req,res)=>res.json({ok:true,reply:getRecentTelegramReply("telegram")}));
+
 app.post("/api/telegram/webhook",(req,res)=>{
   try{
     const message=req.body?.message||req.body?.edited_message||req.body?.channel_post||req.body?.edited_channel_post;
@@ -218,10 +275,12 @@ app.post("/api/telegram/webhook",(req,res)=>{
     res.sendStatus(200);
   }catch(error){console.error("Telegram webhook error:",error);res.sendStatus(200);}
 });
+
 app.post("/api/telegram/setup-webhook",async(_req,res)=>{
   try{
     const result=await telegramApi("setWebhook",{url:telegramWebhookUrl,allowed_updates:["message","edited_message","channel_post","edited_channel_post"],drop_pending_updates:false});
-    res.json({ok:true,result,webhook:telegramWebhookUrl});
+    const info=await telegramApi("getWebhookInfo",{});
+    res.json({ok:true,result,webhook:telegramWebhookUrl,info});
   }catch(error){console.error("Telegram setup webhook error:",error);res.status(500).json({ok:false,error:"Webhook Telegram belum berhasil dipasang."});}
 });
 
@@ -234,11 +293,22 @@ app.post("/api/chat",async(req,res)=>{
   if(!model) return res.status(500).json({error:"OPENAI_MODEL belum diatur di server."});
   const client=new OpenAI({apiKey});
 
-  if(/rangkum|ringkas|analisa|analisis|apa yang terjadi|tindak lanjut|follow.?up/i.test(message) && /telegram|grup|raya|yunas/i.test(message)){
+  if(isTelegramGroupListIntent(message)){
+    return res.json({ok:true,reply:formatTelegramGroupsReply(),model,tool:"telegram_groups"});
+  }
+
+  if(isTelegramRecentIntent(message)){
+    return res.json({ok:true,reply:getRecentTelegramReply(message),model,tool:"telegram_recent"});
+  }
+
+  if(isTelegramAnalysisIntent(message)){
     try{
       const result=await analyzeTelegramGroups(client,model,message);
       return res.json({ok:true,reply:result.reply,model,tool:"telegram_analysis"});
-    }catch(error){console.error("VEXA Telegram analysis error:",error);return res.json({ok:true,reply:"Bang John, pesan grup sudah masuk tetapi analisisnya belum berhasil. Coba ulangi sebentar lagi.",model,tool:"telegram_analysis"});}
+    }catch(error){
+      console.error("VEXA Telegram analysis error:",error);
+      return res.json({ok:true,reply:"Bang John, pesan grup sudah masuk tetapi analisisnya belum berhasil. Coba ulangi sebentar lagi.",model,tool:"telegram_analysis"});
+    }
   }
 
   if(/telegram|kirim pesan|kirim chat/i.test(message)){
@@ -263,7 +333,11 @@ app.post("/api/chat",async(req,res)=>{
 
   const safeHistory=Array.isArray(history)?history.slice(-12).filter(i=>i&&["user","assistant"].includes(i.role)&&typeof i.content==="string"):[];
   const input=[...safeHistory.map(i=>({role:i.role,content:i.content})),{role:"user",content:message}];
-  const response=await client.responses.create({model,instructions:"Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Telegram dapat menerima pesan baru dari grup yang bot VEXA ikuti, menyimpan memori percakapan sementara, menganalisis grup, dan mengirim pesan ke grup yang sudah dikenali. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",input});
+  const response=await client.responses.create({
+    model,
+    instructions:"Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Untuk pertanyaan tentang grup Telegram, jangan menebak atau meminta mention bot jika data tersedia; jalur sistem akan menangani daftar grup, pesan terbaru, dan analisis. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",
+    input
+  });
   const text=response.output_text?.trim()||"Maaf Bang John, saya belum mendapatkan jawaban dari model.";
   res.json({ok:true,reply:text,model});
  }catch(error){console.error("VEXA chat error:",error);res.status(500).json({ok:false,error:"VEXA sedang mengalami gangguan saat menghubungi AI."});}
@@ -285,11 +359,13 @@ app.post("/api/speech",async(req,res)=>{
 });
 
 app.use((err,_req,res,_next)=>{console.error("VEXA server error:",err);res.status(500).json({ok:false,error:"Terjadi kesalahan pada server VEXA."});});
+
 app.listen(port,()=>{
   console.log(`VEXA backend aktif di port ${port}`);
   if(process.env.TELEGRAM_BOT_TOKEN){
     telegramApi("setWebhook",{url:telegramWebhookUrl,allowed_updates:["message","edited_message","channel_post","edited_channel_post"],drop_pending_updates:false})
-      .then(()=>console.log("Telegram webhook aktif:",telegramWebhookUrl))
+      .then(()=>telegramApi("getWebhookInfo",{}))
+      .then(info=>console.log("Telegram webhook aktif:",info?.url||telegramWebhookUrl))
       .catch(error=>console.error("Telegram webhook startup error:",error.message));
   }
 });
