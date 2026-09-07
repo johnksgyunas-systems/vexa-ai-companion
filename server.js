@@ -199,6 +199,7 @@ function getRecentTelegramReply(question) {
 async function sendTelegramMessage(text, targetName = null) {
   if (!process.env.TELEGRAM_BOT_TOKEN) return { ok: false, reason: "token_missing" };
   let target = targetName ? findTelegramChatByName(targetName) : null;
+  if (targetName && !target) return { ok: false, reason: "chat_missing" };
   if (!target && telegramChatId) target = { id: telegramChatId, label: telegramChatLabel || telegramChatId };
   if (!target) return { ok: false, reason: "chat_missing" };
   const sent = await telegramApi("sendMessage", { chat_id: target.id, text: String(text).slice(0, 4096) });
@@ -256,10 +257,13 @@ function isTelegramGroupListIntent(message) {
   return /(grup apa|grup mana|daftar grup|grup telegram|yang terbaca|sudah terbaca|terdeteksi|cek koneksi|cek telegram|berapa grup|grup yang ada)/i.test(message);
 }
 function isTelegramRecentIntent(message) {
-  return /(pesan terbaru|chat terbaru|pesan terakhir|chat terakhir|isi terbaru|apa pesan terakhir|apa isinya|isinya apa|baca pesan|lihat pesan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing)/i.test(message);
+  return /(pesan terbaru|chat terbaru|pesan terakhir|chat terakhir|isi terbaru|apa pesan terakhir|apa isinya|isinya apa|baca pesan|lihat pesan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing|keuangan)/i.test(message);
 }
 function isTelegramAnalysisIntent(message) {
-  return /(rangkum|ringkas|analisa|analisis|monitor|pantau|prioritas|tugas|pekerjaan|pic|apa yang terjadi|apa yang harus saya lakukan|apa yang perlu saya lakukan|yang belum selesai|belum selesai|tindak lanjut|follow.?up|kesimpulan|masalah|kendala|risiko|keputusan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing)/i.test(message);
+  return /(rangkum|ringkas|analisa|analisis|monitor|pantau|prioritas|tugas|pekerjaan|pic|apa yang terjadi|apa yang harus saya lakukan|apa yang perlu saya lakukan|yang belum selesai|belum selesai|tindak lanjut|follow.?up|kesimpulan|masalah|kendala|risiko|keputusan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing|keuangan)/i.test(message);
+}
+function isTelegramSendIntent(message) {
+  return /(telegram|kirim\s+(?:pesan|chat)|kirim\s+(?:ke|di)\s+(?:grup|telegram)|kirim.*\bgrup\b|sampaikan.*\bgrup\b|beritahu.*\bgrup\b)/i.test(String(message || ""));
 }
 
 function buildTelegramContextMessage(message, history = []) {
@@ -315,8 +319,8 @@ async function handleCalendarCommand(client, model, message) {
   return null;
 }
 
-app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.7.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.7.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
+app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.7.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.7.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
 
 app.get("/auth/google", (_req, res) => {
   try {
@@ -392,7 +396,7 @@ app.post("/api/chat", async (req, res) => {
     const client = new OpenAI({ apiKey });
 
     const telegramContextMessage = buildTelegramContextMessage(message, history);
-    const explicitTelegram = hasTelegramConversationContext(message, history) || /telegram|grup|marketing yunas|raya|project/i.test(message);
+    const explicitTelegram = hasTelegramConversationContext(message, history) || /telegram|grup|marketing yunas|raya|project|keuangan/i.test(message);
     if (explicitTelegram) setChatTopic("telegram");
     const telegramContextActive = explicitTelegram || getChatTopic() === "telegram";
 
@@ -415,7 +419,7 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    if (/telegram|kirim pesan|kirim chat/i.test(message)) {
+    if (isTelegramSendIntent(message)) {
       try {
         setChatTopic("telegram");
         const tg = await handleTelegramCommand(client, model, message);
@@ -441,7 +445,7 @@ app.post("/api/chat", async (req, res) => {
     const input = [...safeHistory.map(i => ({ role: i.role, content: i.content })), { role: "user", content: message }];
     const response = await client.responses.create({
       model,
-      instructions: "Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Untuk pertanyaan tentang grup Telegram, jangan menebak atau meminta mention bot jika data tersedia; jalur sistem akan menangani daftar grup, pesan terbaru, dan Executive Monitor. Jika percakapan sebelumnya sedang membahas Telegram, pertahankan konteks itu pada pertanyaan lanjutan singkat. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",
+      instructions: "Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Untuk pertanyaan tentang grup Telegram, jangan menebak atau meminta mention bot jika data tersedia; jalur sistem akan menangani daftar grup, pesan terbaru, Executive Monitor, dan pengiriman pesan atas perintah Bang John. Jika percakapan sebelumnya sedang membahas Telegram, pertahankan konteks itu pada pertanyaan lanjutan singkat. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",
       input
     });
     const text = response.output_text?.trim() || "Maaf Bang John, saya belum mendapatkan jawaban dari model.";
