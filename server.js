@@ -20,6 +20,9 @@ const fallbackStateDir = path.join(process.cwd(), ".vexa-data");
 let activeStateDir = stateDir;
 let stateFile = path.join(activeStateDir, "vexa-state.json");
 let saveTimer = null;
+let lastChatTopic = null;
+let lastChatTopicAt = 0;
+const chatTopicTtlMs = 30 * 60 * 1000;
 
 let googleTokens = process.env.GOOGLE_REFRESH_TOKEN ? { refresh_token: process.env.GOOGLE_REFRESH_TOKEN } : null;
 let telegramChatId = process.env.TELEGRAM_CHAT_ID || null;
@@ -46,12 +49,8 @@ function loadState() {
     if (parsed.googleTokens && typeof parsed.googleTokens === "object") googleTokens = { ...googleTokens, ...parsed.googleTokens };
     if (parsed.telegramChatId) telegramChatId = String(parsed.telegramChatId);
     if (parsed.telegramChatLabel) telegramChatLabel = String(parsed.telegramChatLabel);
-    for (const chat of Array.isArray(parsed.telegramChats) ? parsed.telegramChats : []) {
-      if (chat?.id) telegramChats.set(String(chat.id), chat);
-    }
-    for (const row of Array.isArray(parsed.telegramMessages) ? parsed.telegramMessages : []) {
-      if (row?.chatId && Array.isArray(row.items)) telegramMessages.set(String(row.chatId), row.items.slice(-500));
-    }
+    for (const chat of Array.isArray(parsed.telegramChats) ? parsed.telegramChats : []) if (chat?.id) telegramChats.set(String(chat.id), chat);
+    for (const row of Array.isArray(parsed.telegramMessages) ? parsed.telegramMessages : []) if (row?.chatId && Array.isArray(row.items)) telegramMessages.set(String(row.chatId), row.items.slice(-500));
     console.log(`VEXA state dimuat dari ${stateFile}`);
   } catch (error) {
     console.error("VEXA gagal memuat state:", error.message);
@@ -81,6 +80,16 @@ function saveStateNow() {
 function scheduleSaveState() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveStateNow, 250);
+}
+
+function setChatTopic(topic) {
+  lastChatTopic = topic;
+  lastChatTopicAt = Date.now();
+}
+
+function getChatTopic() {
+  if (!lastChatTopic || Date.now() - lastChatTopicAt > chatTopicTtlMs) return null;
+  return lastChatTopic;
 }
 
 loadState();
@@ -254,9 +263,7 @@ function isTelegramAnalysisIntent(message) {
 }
 
 function buildTelegramContextMessage(message, history = []) {
-  const recent = Array.isArray(history)
-    ? history.slice(-8).filter(i => i && typeof i.content === "string").map(i => i.content).join("\n")
-    : "";
+  const recent = Array.isArray(history) ? history.slice(-8).filter(i => i && typeof i.content === "string").map(i => i.content).join("\n") : "";
   return `${recent}\n${message}`.trim();
 }
 
@@ -308,8 +315,8 @@ async function handleCalendarCommand(client, model, message) {
   return null;
 }
 
-app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.6.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.6.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
+app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.6.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.6.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
 
 app.get("/auth/google", (_req, res) => {
   try {
@@ -385,16 +392,21 @@ app.post("/api/chat", async (req, res) => {
     const client = new OpenAI({ apiKey });
 
     const telegramContextMessage = buildTelegramContextMessage(message, history);
-    const telegramContextActive = hasTelegramConversationContext(message, history);
+    const explicitTelegram = hasTelegramConversationContext(message, history) || /telegram|grup|marketing yunas|raya|project/i.test(message);
+    if (explicitTelegram) setChatTopic("telegram");
+    const telegramContextActive = explicitTelegram || getChatTopic() === "telegram";
 
     if (isTelegramGroupListIntent(message) || (telegramContextActive && isTelegramFollowUp(message) && /(periksa|cek|cek lagi|coba lagi|berapa|yang mana|mana saja|sekarang|bagaimana sekarang|gimana sekarang)/i.test(message))) {
+      setChatTopic("telegram");
       return res.json({ ok: true, reply: formatTelegramGroupsReply(), model, tool: "telegram_groups" });
     }
     if (isTelegramRecentIntent(message) || (telegramContextActive && isTelegramFollowUp(message) && /(apa isinya|isinya apa|pesannya apa|apa pesannya|baca|lihat)/i.test(message))) {
+      setChatTopic("telegram");
       return res.json({ ok: true, reply: getRecentTelegramReply(telegramContextMessage), model, tool: "telegram_recent" });
     }
     if (isTelegramAnalysisIntent(message) || (telegramContextActive && isTelegramFollowUp(message) && /(rangkum|analisa|analisis)/i.test(message))) {
       try {
+        setChatTopic("telegram");
         const result = await analyzeTelegramGroups(client, model, telegramContextMessage);
         return res.json({ ok: true, reply: result.reply, model, tool: "telegram_analysis" });
       } catch (error) {
@@ -405,6 +417,7 @@ app.post("/api/chat", async (req, res) => {
 
     if (/telegram|kirim pesan|kirim chat/i.test(message)) {
       try {
+        setChatTopic("telegram");
         const tg = await handleTelegramCommand(client, model, message);
         if (tg?.handled) return res.json({ ok: true, reply: tg.reply, model, tool: "telegram" });
       } catch (error) {
@@ -415,6 +428,7 @@ app.post("/api/chat", async (req, res) => {
 
     if (/kalender|calendar|jadwal|meeting|rapat|agenda/i.test(message)) {
       try {
+        setChatTopic("calendar");
         const cal = await handleCalendarCommand(client, model, message);
         if (cal?.handled) return res.json({ ok: true, reply: cal.reply, model, tool: "google_calendar" });
       } catch (error) {
