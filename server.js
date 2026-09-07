@@ -246,7 +246,7 @@ async function analyzeTelegramGroups(client, model, question) {
   }).join("\n\n").slice(-30000);
   const response = await client.responses.create({
     model,
-    instructions: "Kamu adalah VEXA. Analisis percakapan grup Telegram milik Bang John. Gunakan hanya isi chat yang diberikan. Bedakan fakta, keputusan, masalah, pekerjaan tertunda, PIC, dan tindak lanjut. Jika sesuatu tidak jelas, katakan tidak jelas. Jawab ringkas dalam bahasa Indonesia dan panggil pengguna Bang John.",
+    instructions: `Kamu adalah VEXA Executive Monitor milik Bang John. Analisis percakapan Telegram seperti asisten eksekutif yang memantau pekerjaan, bukan sekadar merangkum chat. Gunakan HANYA isi percakapan yang diberikan dan jangan mengarang. Jawab dalam bahasa Indonesia, ringkas tetapi operasional. Susun hasil dengan urutan berikut bila datanya ada:\n\nRINGKASAN EKSEKUTIF\n- 2-5 poin terpenting.\n\nPRIORITAS BANG JOHN\n- Hal yang memerlukan perhatian, keputusan, persetujuan, atau tindakan Bang John. Urutkan yang paling mendesak.\n\nTUGAS & PIC\n- Tugas | PIC | status (baru/proses/menunggu/selesai/tidak jelas). Jangan menebak PIC.\n\nKENDALA / RISIKO\n- Masalah, keterlambatan, ketidakjelasan, komitmen yang belum dipenuhi, atau risiko bisnis.\n\nKEPUTUSAN / KESEPAKATAN\n- Hanya keputusan yang benar-benar terlihat dari chat.\n\nTINDAK LANJUT YANG DISARANKAN\n- Maksimal 5 tindakan konkret yang paling berguna. Bedakan saran VEXA dari fakta chat.\n\nJika tidak ada informasi untuk suatu bagian, tulis singkat 'Belum terlihat dari chat'. Jika pertanyaan menyebut grup tertentu, fokus hanya grup itu. Panggil pengguna Bang John.`,
     input: [{ role: "user", content: `Pertanyaan Bang John: ${question}\n\nPercakapan Telegram:\n${transcript}` }]
   });
   return { handled: true, reply: response.output_text?.trim() || "Bang John, saya belum bisa menyimpulkan percakapan grup tadi." };
@@ -259,7 +259,7 @@ function isTelegramRecentIntent(message) {
   return /(pesan terbaru|chat terbaru|pesan terakhir|chat terakhir|isi terbaru|apa pesan terakhir|apa isinya|isinya apa|baca pesan|lihat pesan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing)/i.test(message);
 }
 function isTelegramAnalysisIntent(message) {
-  return /(rangkum|ringkas|analisa|analisis|apa yang terjadi|tindak lanjut|follow.?up|kesimpulan|masalah|keputusan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing)/i.test(message);
+  return /(rangkum|ringkas|analisa|analisis|monitor|pantau|prioritas|tugas|pekerjaan|pic|apa yang terjadi|apa yang harus saya lakukan|apa yang perlu saya lakukan|yang belum selesai|belum selesai|tindak lanjut|follow.?up|kesimpulan|masalah|kendala|risiko|keputusan)/i.test(message) && /(telegram|grup|raya|yunas|project|marketing)/i.test(message);
 }
 
 function buildTelegramContextMessage(message, history = []) {
@@ -274,7 +274,7 @@ function hasTelegramConversationContext(message, history = []) {
 }
 
 function isTelegramFollowUp(message) {
-  return /^(periksa|cek|cek lagi|coba lagi|sekarang|bagaimana sekarang|gimana sekarang|yang mana|mana saja|berapa|apa isinya|isinya apa|pesannya apa|apa pesannya|baca|lihat|rangkum|analisa|analisis)$/i.test(String(message || "").trim());
+  return /^(periksa|cek|cek lagi|coba lagi|sekarang|bagaimana sekarang|gimana sekarang|yang mana|mana saja|berapa|apa isinya|isinya apa|pesannya apa|apa pesannya|baca|lihat|rangkum|analisa|analisis|monitor|pantau|prioritas|tugas|pekerjaan|tindak lanjut|apa yang harus saya lakukan|apa yang perlu saya lakukan)$/i.test(String(message || "").trim());
 }
 
 async function planCalendarAction(client, model, message) {
@@ -315,8 +315,8 @@ async function handleCalendarCommand(client, model, message) {
   return null;
 }
 
-app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.6.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.6.1", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
+app.get("/", (_req, res) => res.json({ service: "VEXA AI Companion", status: "online", version: "3.7.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { file: stateFile, volumeRecommended: activeStateDir === "/data" } }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "VEXA", version: "3.7.0", voice: "shimmer", calendar: Boolean(googleTokens), telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN), telegramGroups: getTelegramGroupRows().length, persistence: { active: true, stateDir: activeStateDir } }));
 
 app.get("/auth/google", (_req, res) => {
   try {
@@ -404,14 +404,14 @@ app.post("/api/chat", async (req, res) => {
       setChatTopic("telegram");
       return res.json({ ok: true, reply: getRecentTelegramReply(telegramContextMessage), model, tool: "telegram_recent" });
     }
-    if (isTelegramAnalysisIntent(message) || (telegramContextActive && isTelegramFollowUp(message) && /(rangkum|analisa|analisis)/i.test(message))) {
+    if (isTelegramAnalysisIntent(message) || (telegramContextActive && isTelegramFollowUp(message) && /(rangkum|analisa|analisis|monitor|pantau|prioritas|tugas|pekerjaan|tindak lanjut|apa yang harus saya lakukan|apa yang perlu saya lakukan)/i.test(message))) {
       try {
         setChatTopic("telegram");
         const result = await analyzeTelegramGroups(client, model, telegramContextMessage);
-        return res.json({ ok: true, reply: result.reply, model, tool: "telegram_analysis" });
+        return res.json({ ok: true, reply: result.reply, model, tool: "telegram_executive_monitor" });
       } catch (error) {
         console.error("VEXA Telegram analysis error:", error);
-        return res.json({ ok: true, reply: "Bang John, pesan grup sudah masuk tetapi analisisnya belum berhasil. Coba ulangi sebentar lagi.", model, tool: "telegram_analysis" });
+        return res.json({ ok: true, reply: "Bang John, pesan grup sudah masuk tetapi analisisnya belum berhasil. Coba ulangi sebentar lagi.", model, tool: "telegram_executive_monitor" });
       }
     }
 
@@ -441,7 +441,7 @@ app.post("/api/chat", async (req, res) => {
     const input = [...safeHistory.map(i => ({ role: i.role, content: i.content })), { role: "user", content: message }];
     const response = await client.responses.create({
       model,
-      instructions: "Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Untuk pertanyaan tentang grup Telegram, jangan menebak atau meminta mention bot jika data tersedia; jalur sistem akan menangani daftar grup, pesan terbaru, dan analisis. Jika percakapan sebelumnya sedang membahas Telegram, pertahankan konteks itu pada pertanyaan lanjutan singkat. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",
+      instructions: "Kamu adalah VEXA, personal AI companion milik Bang John. Gunakan bahasa Indonesia yang natural, hangat, ringkas, tajam, dan membantu. Panggil pengguna 'Bang John'. Bantu berpikir, merencanakan, menghitung, menulis, dan mengarahkan pekerjaan bisnis. VEXA punya integrasi Google Calendar dan Telegram. Untuk pertanyaan tentang grup Telegram, jangan menebak atau meminta mention bot jika data tersedia; jalur sistem akan menangani daftar grup, pesan terbaru, dan Executive Monitor. Jika percakapan sebelumnya sedang membahas Telegram, pertahankan konteks itu pada pertanyaan lanjutan singkat. Jangan mengarang data atau mengaku melakukan tindakan yang tidak benar-benar dijalankan.",
       input
     });
     const text = response.output_text?.trim() || "Maaf Bang John, saya belum mendapatkan jawaban dari model.";
